@@ -231,6 +231,9 @@ def run_simulation_cached(
             "compressed_pages": r.compressed_pages,
             "swap_pages": r.swap_pages,
             "compressed_pool_bytes": r.compressed_pool_bytes,
+            "resident_dram_vpns": list(r.resident_dram_vpns),
+            "resident_compressed_vpns": list(r.resident_compressed_vpns),
+            "resident_swap_vpns": list(r.resident_swap_vpns),
         })
 
     return log_data, metrics.to_dict()
@@ -364,26 +367,10 @@ with tab_live:
 
     st.markdown("---")
 
-    # Reconstruct tier contents at current step
-    # We replay up to current step
-    dram_pages_current = set()
-    comp_pages_current = set()
-    swap_pages_current = set()
-
-    # Replay events up to current_step to get accurate set of pages in each tier
-    for i in range(st.session_state.current_step + 1):
-        r = records[i]
-        p = r["vpn"]
-        dram_pages_current.discard(p)
-        comp_pages_current.discard(p)
-        swap_pages_current.discard(p)
-
-        if r["tier_after"] == "DRAM":
-            dram_pages_current.add(p)
-        elif r["tier_after"] == "COMPRESSED":
-            comp_pages_current.add(p)
-        elif r["tier_after"] == "SWAP":
-            swap_pages_current.add(p)
+    # Exact resident pages at current step directly from hardware manager state
+    dram_pages_current = curr_rec.get("resident_dram_vpns", [])
+    comp_pages_current = curr_rec.get("resident_compressed_vpns", [])
+    swap_pages_current = curr_rec.get("resident_swap_vpns", [])
 
     # Active Page Focus Inspector Banner
     is_write_label = "WRITE" if curr_rec["is_write"] else "READ"

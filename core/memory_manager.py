@@ -37,6 +37,9 @@ class AccessRecord:
     compressed_pages: int
     swap_pages: int
     compressed_pool_bytes: int
+    resident_dram_vpns: Tuple[int, ...] = ()
+    resident_compressed_vpns: Tuple[int, ...] = ()
+    resident_swap_vpns: Tuple[int, ...] = ()
 
 
 class MemoryManager(ABC):
@@ -226,6 +229,9 @@ class BaselineManager(MemoryManager):
             compressed_pages=0,
             swap_pages=self.swap.page_count,
             compressed_pool_bytes=0,
+            resident_dram_vpns=tuple(self.dram.get_resident_vpns()),
+            resident_compressed_vpns=(),
+            resident_swap_vpns=tuple(self.swap.get_swapped_vpns()),
         )
         self.access_log.append(record)
         return record
@@ -399,6 +405,9 @@ class TieredManager(MemoryManager):
             compressed_pages=self.compressed.page_count,
             swap_pages=self.swap.page_count,
             compressed_pool_bytes=self.compressed.used_bytes,
+            resident_dram_vpns=tuple(self.dram.get_resident_vpns()),
+            resident_compressed_vpns=tuple(self.compressed.get_resident_vpns()),
+            resident_swap_vpns=tuple(self.swap.get_swapped_vpns()),
         )
         self.access_log.append(record)
         return record
