@@ -212,6 +212,13 @@ class BaselineManager(MemoryManager):
         total_cost = dram_lat + ssd_read_lat + evict_ssd_write_lat
         self.total_latency_ns += total_cost
 
+        dram_vpns = tuple(self.dram.get_resident_vpns())
+        swap_vpns = tuple(
+            vpn
+            for vpn in range(self.config.virtual_address_space)
+            if self.page_table.get_entry(vpn).tier == Tier.SWAP
+        )
+
         record = AccessRecord(
             access_index=self.time_step,
             vpn=vpn,
@@ -225,13 +232,13 @@ class BaselineManager(MemoryManager):
             ssd_read_latency_ns=ssd_read_lat,
             eviction_compress_latency_ns=0,
             eviction_ssd_write_latency_ns=evict_ssd_write_lat,
-            dram_pages=self.dram.frame_count,
+            dram_pages=len(dram_vpns),
             compressed_pages=0,
-            swap_pages=self.swap.page_count,
+            swap_pages=len(swap_vpns),
             compressed_pool_bytes=0,
-            resident_dram_vpns=tuple(self.dram.get_resident_vpns()),
+            resident_dram_vpns=dram_vpns,
             resident_compressed_vpns=(),
-            resident_swap_vpns=tuple(self.swap.get_swapped_vpns()),
+            resident_swap_vpns=swap_vpns,
         )
         self.access_log.append(record)
         return record
@@ -388,6 +395,14 @@ class TieredManager(MemoryManager):
         )
         self.total_latency_ns += total_cost
 
+        dram_vpns = tuple(self.dram.get_resident_vpns())
+        comp_vpns = tuple(self.compressed.get_resident_vpns())
+        swap_vpns = tuple(
+            vpn
+            for vpn in range(self.config.virtual_address_space)
+            if self.page_table.get_entry(vpn).tier == Tier.SWAP
+        )
+
         record = AccessRecord(
             access_index=self.time_step,
             vpn=vpn,
@@ -401,13 +416,13 @@ class TieredManager(MemoryManager):
             ssd_read_latency_ns=ssd_read_lat,
             eviction_compress_latency_ns=evict_comp_lat,
             eviction_ssd_write_latency_ns=evict_ssd_write_lat,
-            dram_pages=self.dram.frame_count,
-            compressed_pages=self.compressed.page_count,
-            swap_pages=self.swap.page_count,
+            dram_pages=len(dram_vpns),
+            compressed_pages=len(comp_vpns),
+            swap_pages=len(swap_vpns),
             compressed_pool_bytes=self.compressed.used_bytes,
-            resident_dram_vpns=tuple(self.dram.get_resident_vpns()),
-            resident_compressed_vpns=tuple(self.compressed.get_resident_vpns()),
-            resident_swap_vpns=tuple(self.swap.get_swapped_vpns()),
+            resident_dram_vpns=dram_vpns,
+            resident_compressed_vpns=comp_vpns,
+            resident_swap_vpns=swap_vpns,
         )
         self.access_log.append(record)
         return record

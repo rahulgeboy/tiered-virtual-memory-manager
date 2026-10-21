@@ -84,7 +84,13 @@ class MetricsCalculator:
 
         dram_pages = manager.dram.frame_count
         compressed_pages = getattr(manager, "compressed", None).page_count if hasattr(manager, "compressed") else 0
-        swap_pages = manager.swap.page_count
+        swap_pages = len(
+            [
+                v
+                for v in range(manager.config.virtual_address_space)
+                if manager.page_table.get_entry(v).tier.value == "SWAP"
+            ]
+        )
         pool_bytes = getattr(manager, "compressed", None).used_bytes if hasattr(manager, "compressed") else 0
 
         # In-memory capacity includes physical DRAM frames + pages in compressed pool
