@@ -1,0 +1,272 @@
+================================================================================
+TIERED VIRTUAL MEMORY MANAGER WITH PAGE COMPRESSION
+SYSTEM ARCHITECTURE, OPERATING SYSTEM CONCEPTS & LAB VIVA EXAMINATION GUIDE
+================================================================================
+
+TABLE OF CONTENTS:
+1. Executive Summary & Problem Formulation
+2. Three-Tier Memory Hierarchy Architecture
+3. Latency & Hardware Cost Model
+4. Paging Control Flow & Eviction Pipeline (ASCII Diagrams)
+5. Operating System Concepts & Policies
+   - Demand Paging & Cold Faults
+   - Minor Faults vs. Major Faults
+   - The Compress-or-Skip Policy
+   - Byte-Capacity Pool Accounting
+   - Clean-Page Swap-Write Suppression
+   - Average Memory Access Time (AMAT) Mathematical Derivation
+   - Dynamic Adaptive Pool Sizing
+6. University Operating Systems Viva Q&A (16 Comprehensive Questions & Answers)
+
+================================================================================
+1. EXECUTIVE SUMMARY & PROBLEM FORMULATION
+================================================================================
+In traditional operating systems, when physical memory (RAM) is full, the OS 
+evicts victim pages to an SSD or hard drive swap partition. However:
+  - Reading from DRAM takes ~100 nanoseconds.
+  - Reading from an SSD takes ~100,000 nanoseconds (100 microseconds).
+  - This is a 1,000x latency gap! When physical RAM is exhausted, even a tiny 
+    increase in memory demand causes "disk thrashing", where the CPU sits idle 
+    waiting for slow storage I/O.
+
+This project implements a Three-Tier Virtual Memory Manager inspired by Linux 
+zswap and zram:
+  - Tier 0 (DRAM): Fast physical memory holding hot, recently accessed pages.
+  - Tier 1 (Compressed RAM / zswap): An in-memory pool holding warm pages 
+    compressed using real CPU algorithms (zlib / lzma). Servicing a fault from 
+    this tier costs only ~8 to 12 microseconds (CPU decompression) instead of 
+    100 microseconds on disk.
+  - Tier 2 (SSD Swap): Backing secondary storage holding cold pages.
+
+================================================================================
+2. THREE-TIER MEMORY HIERARCHY ARCHITECTURE
+================================================================================
++------------------------------------------------------------------------------+
+|                              CPU & MMU                                       |
+|  Translates Virtual Address (VPN + Offset) -> Checks Page Table Entry (PTE)  |
++------------------------------------------------------------------------------+
+                                       |
+          +----------------------------+----------------------------+
+          |                            |                            |
+          v                            v                            v
++--------------------+      +--------------------+      +--------------------+
+|   TIER 0: DRAM     |      | TIER 1: COMPRESSED |      | TIER 2: SSD SWAP   |
+|   Physical Frames  |      |   RAM POOL (zswap) |      |   Backing Store    |
++--------------------+      +--------------------+      +--------------------+
+| - 64 Frames        |      | - Bounded by BYTES |      | - Unlimited size   |
+| - 100 ns Latency   |      | - 8-12 µs Latency  |      | - 100 µs Latency   |
+| - Uncompressed     |      | - zlib / lzma      |      | - 4KB Raw Pages    |
+| - O(1) LRU Order   |      | - Warm Page Cache  |      | - Cold Page Store  |
++--------------------+      +--------------------+      +--------------------+
+          |                            ^                            ^
+          |--- Demote (Compress) ------|                            |
+          |--- Demote (Incompressible Bypass: Ratio > 0.75) --------|
+          |                                                         |
+          +--- Demote (Pool Byte Overflow) -------------------------|
+
+================================================================================
+3. LATENCY & HARDWARE COST MODEL
+================================================================================
+The simulator tracks nanosecond-scale operational latencies:
+  - DRAM Hit:                  100 ns
+  - SSD Swap Read:         100,000 ns (100 µs)
+  - SSD Swap Write:        100,000 ns (100 µs)
+  - CPU Page Decompression: Real measured time via time.perf_counter_ns()
+                            (~8,000 ns - 12,000 ns for 4KB text)
+  - CPU Page Compression:   Real measured time via time.perf_counter_ns()
+                            (~30,000 ns - 100,000 ns depending on data entropy)
+  - Deterministic Mode:     Optional fixed cost mode (compress = 3,000 ns, 
+                            decompress = 2,000 ns) for reproducible benchmarks.
+
+================================================================================
+4. PAGING CONTROL FLOW & EVICTION PIPELINE
+================================================================================
+
+[A] Page Access Service Pipeline:
+---------------------------------
+Instruction references Virtual Page Number (VPN):
+1. Lookup PTE(VPN).
+2. If PTE.tier == DRAM:
+   -> HIT: Read/write raw 4KB bytes. Move VPN to LRU tail. Cost = 100 ns.
+3. If PTE.tier == COMPRESSED:
+   -> MINOR FAULT: Decompress page from Tier 1 with zlib.
+      Bring to DRAM (evict DRAM victim if full). Cost = 100 ns + Decompress time.
+4. If PTE.tier == SWAP:
+   -> MAJOR FAULT: Read 4KB page from SSD swap.
+      Bring to DRAM (evict DRAM victim if full). Cost = 100 ns + 100,000 ns.
+5. If PTE.tier == UNMAPPED:
+   -> COLD FAULT: Allocate fresh 4KB content.
+      Bring to DRAM (evict DRAM victim if full). Cost = 100 ns.
+
+[B] DRAM Eviction & Demotion Pipeline:
+--------------------------------------
+When DRAM is full and a new page must enter:
+1. Select LRU victim page from DRAM via OrderedDict.popitem(last=False) in O(1).
+2. Compress victim page contents with real CPU compression engine.
+3. Check Compress-or-Skip Criteria:
+   Is (compressed_size / 4096) <= 0.75 AND pool_capacity >= compressed_size?
+   - IF YES (Compressible):
+     Demote oldest compressed pages to SSD until free_bytes >= compressed_size.
+     Store compressed bytes in Tier 1. Set PTE.tier = COMPRESSED.
+   - IF NO (Incompressible):
+     Bypass Tier 1. Write uncompressed 4KB page directly to SSD Swap.
+     Set PTE.tier = SWAP. (Skip SSD write if an up-to-date clean copy exists).
+
+================================================================================
+5. OPERATING SYSTEM CONCEPTS & POLICIES
+================================================================================
+
+5.1 Demand Paging & Cold Faults:
+Operating systems do not load an entire executable into physical memory upon 
+launch. Instead, pages are mapped lazily: only when an instruction tries to 
+read or write an address on a page is a "Cold Fault" (first touch) triggered, 
+allocating a physical frame.
+
+5.2 Minor Faults vs. Major Faults:
+- Minor Fault: The requested page is present in system RAM, but located in an 
+  intermediate in-memory cache (like zswap, zram, or page cache). The CPU simply 
+  decompresses the page and updates the page table. No disk I/O is performed.
+- Major Fault: The page is absent from RAM and must be fetched from an external 
+  storage device (SSD swap partition). The process enters a blocking wait state 
+  while DMA transfers the block across the PCIe/SATA bus.
+
+5.3 The Compress-or-Skip Policy:
+Lossless compression algorithms (DEFLATE/zlib) rely on repeated patterns. High-
+entropy data (encrypted buffers, compressed video, random numbers) cannot be 
+compressed and actually expands when headers are added.
+The simulator enforces:
+  If (compressed_size / 4096) > 0.75 -> Bypass Tier 1 to SSD Swap.
+This prevents incompressible pages from consuming precious RAM headroom and 
+evicting useful warm pages.
+
+5.4 Byte-Capacity Pool Accounting:
+Physical DRAM uses fixed 4096-byte frames. In contrast, compressed pages have 
+variable sizes (Zero: ~26 B, Text: ~880 B, Structured: ~1,300 B). If the pool 
+were budgeted by page count, a 26-byte page would consume the same resource as an 
+880-byte page. Budgeting by exact BYTES reflects real Linux memory allocators 
+(zsmalloc / zbud) and maximizes memory density.
+
+5.5 Clean-Page Swap-Write Suppression:
+When a page is paged in from SSD swap for a read-only access and never modified 
+(PTE.dirty == False), the SSD already holds an identical copy. When that page 
+is evicted from memory, the simulator suppresses the physical SSD write, saving 
+100,000 ns of I/O latency and extending SSD flash endurance.
+
+5.6 Average Memory Access Time (AMAT) Mathematical Derivation:
+AMAT represents the expected latency of an average memory reference:
+  AMAT = t_DRAM + (P_minor * t_decompress) + (P_major * t_SSD_read) + E_overhead
+Where:
+  - t_DRAM        = 100 ns
+  - P_minor       = Minor Fault Rate (N_minor / N_total)
+  - t_decompress  = CPU Decompression Latency (~8-12 µs)
+  - P_major       = Major Fault Rate (N_major / N_total)
+  - t_SSD_read    = SSD Transfer Latency (100 µs)
+  - E_overhead    = Eviction cost (compression + SSD writeback if evicted)
+
+5.7 Dynamic Adaptive Pool Sizing (AdaptiveTieredManager):
+Models Linux dynamic memory pressure balancing (PSI - Pressure Stall Info).
+A sliding window of recent accesses tracks the major fault rate:
+  - If Major Fault Rate >= 10%: The system is thrashing to SSD. The manager 
+    dynamically expands compressed pool capacity (+16 KB chunks).
+  - If Major Fault Rate <= 2% and pool utilization is low: Memory pressure has 
+    subsided. The manager shrinks the pool, returning RAM to the OS.
+
+================================================================================
+6. UNIVERSITY OPERATING SYSTEMS VIVA Q&A (16 QUESTIONS & ANSWERS)
+================================================================================
+
+Q1: What is demand paging and why is it used in modern operating systems?
+A1: Demand paging is a memory management scheme where pages are loaded into 
+    physical DRAM only when referenced by a running instruction (lazy loading). 
+    It minimizes memory usage, reduces startup latency, and allows processes to 
+    run even when their virtual address space exceeds physical DRAM.
+
+Q2: What is the fundamental difference between a Minor Fault and a Major Fault?
+A2: A Minor Fault (soft fault) occurs when the desired page resides in system 
+    RAM (e.g. in the zswap compressed cache or page cache); it is resolved by 
+    fast CPU decompression (~8-12 µs) without disk I/O. A Major Fault (hard fault) 
+    requires reading data from the SSD swap device (~100 µs), which is roughly 
+    10x to 1,000x slower.
+
+Q3: What is Linux zswap and how does it differ from Linux zram?
+A3: zswap is a compressed writeback cache that operates in front of an actual 
+    disk swap partition. Evicted pages are compressed and cached in RAM; if the 
+    zswap pool fills up, the oldest compressed pages are written to the SSD.
+    In contrast, zram creates a standalone compressed RAM block device that 
+    acts as swap without requiring any physical disk storage.
+
+Q4: Why must the compressed pool capacity be measured in BYTES rather than pages?
+A4: Physical frames are uniformly 4096 bytes, but compressed pages have variable 
+    sizes depending on data entropy (e.g., 26 bytes for zero pages vs 880 bytes 
+    for text). Budgeting strictly in BYTES models real kernel allocators 
+    (zsmalloc) and prevents severe internal memory fragmentation.
+
+Q5: What is the "Compress-or-Skip" policy, and why is it essential?
+A5: When high-entropy data (encrypted files, media, random bytes) is compressed, 
+    the output often exceeds 4096 bytes due to compression headers. The compress-
+    or-skip policy checks if (compressed_size / 4096) > 0.75. If so, it bypasses 
+    Tier 1 and writes directly to SSD swap, preventing pool pollution and saving 
+    RAM for compressible pages.
+
+Q6: Why did the Tiered system show NO benefit (or a slowdown) on random data?
+A6: For high-entropy random data, every eviction causes the CPU to spend ~98 µs 
+    attempting compression. Once rejected by the skip threshold, the page is 
+    written to SSD anyway. The system incurs the full SSD write cost PLUS 
+    wasted CPU cycles, demonstrating why real kernels must avoid compressing 
+    incompressible data.
+
+Q7: How does the clean-page swap-write bypass optimization work?
+A7: When a page is read from swap into DRAM for a read-only access and never 
+    modified (PTE.dirty == False), an identical copy already exists on SSD swap. 
+    Upon subsequent eviction, the OS skips the redundant physical SSD write, 
+    saving 100 µs of latency and preserving SSD flash endurance.
+
+Q8: How does temporal locality impact the hit ratio under LRU?
+A8: Temporal locality states that memory locations accessed recently are likely 
+    to be accessed again soon. LRU moves recently referenced pages to the tail 
+    of an access queue, ensuring the active working set remains in fast DRAM.
+
+Q9: Why is a simple Looping workload a pathological worst-case for pure LRU?
+A9: If an application loops over N pages and physical DRAM holds only N-1 frames, 
+    every access targets the page evicted at the start of the previous loop. 
+    The cache hit rate collapses to exactly 0%, causing continuous thrashing.
+
+Q10: How does a three-tier system mitigate the LRU looping pathology?
+A10: Page compression expands effective in-memory capacity. If physical DRAM has 
+     64 frames, the compressed pool can hold another 100+ pages. If a loop has 
+     76 pages, the entire loop fits in memory (DRAM + Compressed RAM), turning 
+     100% of would-be disk faults into fast in-memory minor faults.
+
+Q11: How is O(1) LRU replacement implemented in this simulator?
+A11: The simulator uses Python's `collections.OrderedDict`, implemented in C as 
+     a hash map combined with a doubly linked list. Key lookup, moving an entry 
+     to the tail via `move_to_end()`, and evicting the head via `popitem(last=False)` 
+     all execute in strict O(1) time without scanning.
+
+Q12: What is AMAT and how is it calculated in a 3-tier memory hierarchy?
+A12: Average Memory Access Time is the expected latency per memory reference:
+     AMAT = t_DRAM + (P_minor * t_decomp) + (P_major * t_SSD_read) + E_overhead
+     It quantifies the real performance delivered by the memory hierarchy.
+
+Q13: What happens when the compressed pool byte capacity overflows?
+A13: The least-recently-used compressed pages are evicted from Tier 1: they are 
+     decompressed and written out to SSD swap, freeing byte headroom for the 
+     incoming newly compressed page.
+
+Q14: How does Adaptive Pool Sizing (AdaptiveTieredManager) work?
+A14: It continuously calculates the sliding-window major fault rate. If major 
+     faults exceed 10% (indicating SSD thrashing), it dynamically expands pool 
+     capacity. If major faults drop below 2% and the pool is underutilized, it 
+     contracts the pool to return RAM to the operating system.
+
+Q15: What is the space-saving formula and how does it relate to compression ratio?
+A15: Compression Ratio = Compressed Size / Raw Size.
+     Space Saving %    = (1.0 - Compression Ratio) * 100.
+     A compression ratio of 0.20 corresponds to an 80% space saving.
+
+Q16: Why is lossless compression mandatory for virtual memory paging?
+A16: Memory pages contain binary executable instructions, pointers, and critical 
+     program variables. Lossy compression would alter bit patterns, causing 
+     segmentation faults, invalid pointers, instruction corruption, or kernel 
+     panics. Lossless compression guarantees 100% byte fidelity upon decompression.
+================================================================================

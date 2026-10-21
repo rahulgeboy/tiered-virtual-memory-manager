@@ -1,0 +1,7 @@
+pool_pages,dram_frames,effective_capacity_pages,capacity_gain_pct,final_compressed_pages,pool_bytes_used,swap_pages
+0,64,64,0.0,0,0,256
+16,64,128,100.0,64,65027,256
+32,64,194,203.125,130,130471,256
+64,64,256,300.0,192,192501,0
+96,64,256,300.0,192,192501,0
+128,64,256,300.0,192,192501,0
