@@ -164,6 +164,7 @@ def run_simulation_cached(
     compression_level: int,
     seed: int,
     fixed_cost: bool,
+    _cache_version: str = "v1.2_mutual_exclusivity",
 ) -> Tuple[List[Dict], Dict]:
     """Execute simulation run and return serialized records and metrics."""
     config = SimulationConfig(
@@ -278,6 +279,11 @@ with st.sidebar:
         level_val = st.slider("Compression Level", min_value=1, max_value=9, value=6)
         seed_val = st.number_input("Random Seed", value=42)
         fixed_cost_chk = st.checkbox("Deterministic Fixed Cost Mode", value=False)
+
+    st.markdown("---")
+    if st.button("🔄 Clear Cache & Rerun", use_container_width=True, help="Force clears Streamlit cache and reruns the simulation"):
+        st.cache_data.clear()
+        st.rerun()
 
 # Header
 st.markdown("<div class='main-title'>Tiered Virtual Memory Manager Simulator</div>", unsafe_allow_html=True)
@@ -616,7 +622,7 @@ with tab_experiments:
             import run_experiments
             with st.spinner("Executing all 6 experiments..."):
                 run_experiments.main()
-            st.experimental_rerun()
+            st.rerun()
 
     exp_select = st.selectbox(
         "Choose Experiment Study",
