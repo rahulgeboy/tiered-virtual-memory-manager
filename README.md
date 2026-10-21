@@ -16,7 +16,7 @@ The simulator measures **real compression ratios and CPU nanoseconds** using sta
 
 ---
 
-## 🚀 Quickstart & Installation
+## Quickstart & Installation
 
 ### 1. Prerequisites
 - Python 3.10+ (tested on Python 3.12)
@@ -31,7 +31,7 @@ pip install -r requirements.txt
 
 ---
 
-## 💻 How to Run
+## How to Run
 
 ### 1. Run via CLI (`main.py`)
 Run a side-by-side comparison between the Baseline (DRAM + SSD) and Tiered (DRAM + Compressed RAM + SSD) systems on a Zipf workload:
